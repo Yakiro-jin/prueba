@@ -1,13 +1,25 @@
 version: '3.8'
 
 services:
-  # ── Frontend React (Nginx) ─────────────────────────────
-  web:
+  backend:
+    build: ./backend
+    container_name: inventario-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DB_HOST: 192.168.100.100
+      DB_PORT: 32768
+      DB_NAME: papeleriadb
+      DB_USER: postgres
+      DB_PASSWORD: 30141644
+      PORT: 3000
+
+  frontend:
     build: .
     container_name: inventario-frontend
     restart: unless-stopped
     ports:
       - "8080:80"
-    # El backend ahora corre de forma independiente
-    # Si quieres que hablen en Docker, deberías ponerlos en la misma red
-    # o usar la IP externa del servidor para las llamadas API
+    depends_on:
+      - backend
