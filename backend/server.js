@@ -15,10 +15,19 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD,
 });
 
-// Test de Conexión
+// Test de Conexión Detallado
+console.log('--------------------------------------------------');
+console.log('📡 Intentando conectar a PostgreSQL en:');
+console.log(`   Host: ${process.env.DB_HOST}`);
+console.log(`   Puerto: ${process.env.DB_PORT || 5432}`);
+console.log(`   Base de Datos: ${process.env.DB_NAME}`);
+console.log(`   Usuario: ${process.env.DB_USER}`);
+console.log('--------------------------------------------------');
+
 pool.connect((err, client, release) => {
     if (err) {
         console.error('❌ ERROR FATAL DB:', err.message);
+        console.error('🔍 Sugerencia: Revisa si el host y puerto son accesibles desde el contenedor.');
     } else {
         console.log('✅ DB CONECTADA EXITOSAMENTE');
         release();
@@ -31,7 +40,8 @@ app.use(express.json());
 
 // Middleware de Logging (Muestra cada petición)
 app.use((req, res, next) => {
-    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] ${req.method} ${req.url}`);
     if (Object.keys(req.body).length > 0) {
         console.log('📦 Body:', JSON.stringify(req.body, null, 2));
     }
@@ -40,7 +50,43 @@ app.use((req, res, next) => {
 
 // API Endpoints
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date() });
+    res.json({
+        status: 'ok',
+        timestamp: new Date(),
+        env_check: {
+            db_host: !!process.env.DB_HOST,
+            db_name: !!process.env.DB_NAME
+        }
+    });
+});
+
+// Endpoint para verificar DB manualmente
+app.get('/api/db-status', async (req, res) => {
+    try {
+        const start = Date.now();
+        const result = await pool.query('SELECT NOW() as now, version() as version');
+        const duration = Date.now() - start;
+        res.json({
+            status: 'connected',
+            time_on_db: result.rows[0].now,
+            version: result.rows[0].version,
+            latency: `${duration}ms`,
+            config: {
+                host: process.env.DB_HOST,
+                db: process.env.DB_NAME
+            }
+        });
+    } catch (err) {
+        console.error('❌ Error en /api/db-status:', err.message);
+        res.status(500).json({
+            status: 'error',
+            message: err.message,
+            config: {
+                host: process.env.DB_HOST,
+                port: process.env.DB_PORT
+            }
+        });
+    }
 });
 
 // 1. OBTENER CATEGORÍAS
