@@ -236,6 +236,52 @@ app.delete('/api/productos/:id', async (req, res) => {
     }
 });
 
+// 7. REALIZAR VENTA (Descontar inventario)
+app.post('/api/ventas', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { items } = req.body; // Array de { id, cantidad }
+
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ error: 'No hay items en la venta' });
+        }
+
+        await client.query('BEGIN');
+
+        for (const item of items) {
+            // Verificar stock actual
+            const resProd = await client.query('SELECT stock, nombre FROM productos WHERE id = $1 FOR UPDATE', [item.id]);
+
+            if (resProd.rows.length === 0) {
+                throw new Error(`Producto ID ${item.id} no encontrado`);
+            }
+
+            const currentStock = resProd.rows[0].stock;
+            const productName = resProd.rows[0].nombre;
+
+            if (currentStock < item.cantidad) {
+                throw new Error(`Stock insuficiente para "${productName}". Disponible: ${currentStock}, Solicitado: ${item.cantidad}`);
+            }
+
+            // Descontar stock
+            await client.query(
+                'UPDATE productos SET stock = stock - $1, actualizado_en = NOW() WHERE id = $2',
+                [item.cantidad, item.id]
+            );
+        }
+
+        await client.query('COMMIT');
+        console.log('✅ Venta realizada con éxito. Items:', items.length);
+        res.json({ success: true, message: 'Venta procesada correctamente' });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('❌ Error POST /api/ventas:', err.message);
+        res.status(400).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
 app.listen(PORT, () => {
     console.log('--------------------------------------------------');
     console.log(`🚀 SERVIDOR INICIADO EN PUERTO ${PORT}`);

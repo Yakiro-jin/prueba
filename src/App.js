@@ -189,12 +189,82 @@ function App() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [toasts, setToasts] = useState([]);
 
+  // 🛒 Cart State
+  const [cart, setCart] = useState([]);
+  const [showCart, setShowCart] = useState(false);
+  const [checkingOut, setCheckingOut] = useState(false);
+
   // ── Toasts
   const addToast = useCallback((message, type = 'success') => {
     const id = Date.now();
     setToasts(t => [...t, { id, message, type }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
   }, []);
+
+  // 🛒 Cart Logic
+  const addToCart = (product) => {
+    if (product.stock <= 0) {
+      addToast('Este producto no tiene stock', 'error');
+      return;
+    }
+
+    setCart(prev => {
+      const existing = prev.find(item => item.id === product.id);
+      if (existing) {
+        if (existing.cantidad >= product.stock) {
+          addToast('No hay más stock disponible', 'error');
+          return prev;
+        }
+        return prev.map(item =>
+          item.id === product.id ? { ...item, cantidad: item.cantidad + 1 } : item
+        );
+      }
+      addToast(`"${product.nombre}" añadido al carrito`);
+      return [...prev, { ...product, cantidad: 1 }];
+    });
+  };
+
+  const removeFromCart = (productId) => {
+    setCart(prev => prev.filter(item => item.id !== productId));
+  };
+
+  const updateCartQuantity = (productId, delta) => {
+    setCart(prev => prev.map(item => {
+      if (item.id === productId) {
+        const newQty = item.cantidad + delta;
+        if (newQty <= 0) return item;
+        if (newQty > item.stock) {
+          addToast('Límite de stock alcanzado', 'error');
+          return item;
+        }
+        return { ...item, cantidad: newQty };
+      }
+      return item;
+    }));
+  };
+
+  const cartTotal = cart.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
+
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    setCheckingOut(true);
+    try {
+      await apiFetch('/ventas', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: cart.map(item => ({ id: item.id, cantidad: item.cantidad }))
+        }),
+      });
+      addToast('Venta realizada con éxito', 'success');
+      setCart([]);
+      setShowCart(false);
+      fetchAll();
+    } catch (err) {
+      addToast(err.message, 'error');
+    } finally {
+      setCheckingOut(false);
+    }
+  };
 
   // ── Cargar datos del backend
   const fetchAll = useCallback(async () => {
@@ -350,6 +420,9 @@ function App() {
             />
           </div>
           <div className="topbar-actions">
+            <button className={`btn-cart-toggle ${cart.length > 0 ? 'has-items' : ''}`} onClick={() => setShowCart(true)}>
+              🛒 <span className="cart-count">{cart.length}</span>
+            </button>
             <div className="view-toggle">
               <button className={`view-toggle-btn ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')} title="Vista tabla">☰</button>
               <button className={`view-toggle-btn ${view === 'cards' ? 'active' : ''}`} onClick={() => setView('cards')} title="Vista tarjetas">⊞</button>
@@ -478,7 +551,8 @@ function App() {
                       </td>
                       <td>
                         <div className="actions-cell">
-                          <button className="btn-table btn-table-edit" onClick={() => setModal({ mode: 'edit', product: p })}>✏️ Editar</button>
+                          <button className="btn-table btn-table-edit" onClick={() => setModal({ mode: 'edit', product: p })}>✏️</button>
+                          <button className="btn-table btn-table-cart" onClick={() => addToCart(p)} disabled={p.stock <= 0}>🛒</button>
                           <button className="btn-table btn-table-delete" onClick={() => setConfirmDelete(p)}>🗑️</button>
                         </div>
                       </td>
@@ -506,6 +580,7 @@ function App() {
                   <div className="product-card-footer">
                     <span className={`stock-badge ${getStockClass(p.stock)}`}>{p.stock} {p.unidad}</span>
                     <div className="product-card-actions">
+                      <button className="btn-table btn-table-cart" onClick={() => addToCart(p)} disabled={p.stock <= 0} style={{ padding: '4px 12px' }}>🛒 Añadir</button>
                       <button className="btn-table btn-table-edit" onClick={() => setModal({ mode: 'edit', product: p })}>✏️</button>
                       <button className="btn-table btn-table-delete" onClick={() => setConfirmDelete(p)}>🗑️</button>
                     </div>
@@ -516,6 +591,62 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* ── CART DRAWER */}
+      {showCart && (
+        <div className="cart-backdrop" onClick={() => setShowCart(false)}>
+          <div className="cart-drawer" onClick={e => e.stopPropagation()}>
+            <div className="cart-header">
+              <span className="cart-title">🛒 Carrito de Compras</span>
+              <button className="cart-close" onClick={() => setShowCart(false)}>✕</button>
+            </div>
+            <div className="cart-body">
+              {cart.length === 0 ? (
+                <div className="cart-empty">
+                  <div className="cart-empty-icon">🛒</div>
+                  <h3>El carrito está vacío</h3>
+                  <p>Añade productos del inventario para realizar una venta</p>
+                </div>
+              ) : (
+                <div className="cart-items">
+                  {cart.map(item => (
+                    <div key={item.id} className="cart-item">
+                      <div className="cart-item-info">
+                        <div className="cart-item-name">{item.name || item.nombre}</div>
+                        <div className="cart-item-price">{formatPrice(item.precio)} c/u</div>
+                      </div>
+                      <div className="cart-item-actions">
+                        <div className="qty-controls">
+                          <button onClick={() => updateCartQuantity(item.id, -1)}>−</button>
+                          <span>{item.cantidad}</span>
+                          <button onClick={() => updateCartQuantity(item.id, 1)}>+</button>
+                        </div>
+                        <div className="cart-item-subtotal">{formatPrice(item.precio * item.cantidad)}</div>
+                        <button className="btn-remove" onClick={() => removeFromCart(item.id)}>🗑️</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {cart.length > 0 && (
+              <div className="cart-footer">
+                <div className="cart-total-row">
+                  <span>Total a pagar:</span>
+                  <span className="cart-total-value">{formatPrice(cartTotal)}</span>
+                </div>
+                <button
+                  className="btn btn-primary btn-checkout"
+                  onClick={handleCheckout}
+                  disabled={checkingOut}
+                >
+                  {checkingOut ? '⏳ Procesando...' : '💳 Realizar Venta'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── MODALS */}
       {modal && (
