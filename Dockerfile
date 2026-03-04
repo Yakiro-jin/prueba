@@ -18,6 +18,9 @@ RUN npm run build
 # ------ ETAPA 2: Servir la aplicación con Nginx ------
 FROM nginx:stable-alpine AS production
 
+# Copiar configuración personalizada de Nginx
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Copiar el resultado de la compilación desde la etapa 'build'
 COPY --from=build /app/build /usr/share/nginx/html
 
