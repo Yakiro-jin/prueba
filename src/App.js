@@ -62,10 +62,10 @@ function Hero() {
   return (
     <div className="hero-section glass-dark">
       <div className="hero-content fade-in">
-        <h1 className="hero-title">InvenPro <span className="gradient-text">Premium</span></h1>
-        <p className="hero-subtitle">Gestión inteligente para negocios de clase mundial.</p>
+        <h1 className="hero-title">Impresiones <span className="gradient-text">Yanet</span></h1>
+        <p className="hero-subtitle">utiles escolares y oficina</p>
         <div className="hero-features">
-          {['⚡ Agilidad', '💎 Exclusividad', '📦 Precisión'].map(t => <span key={t} className="hero-tag">{t}</span>)}
+          {['Copias', 'Impresiones', 'papeleria'].map(t => <span key={t} className="hero-tag">{t}</span>)}
         </div>
       </div>
     </div>
@@ -435,7 +435,7 @@ function AppContent() {
     try {
       const orders = await apiFetch('/ordenes');
       setPendingOrders(orders.filter(o => o.estado === 'pendiente').length);
-    } catch (_) {}
+    } catch (_) { }
   }, [isAdminPath]);
 
   useEffect(() => {
@@ -492,10 +492,10 @@ function AppContent() {
 
   const navItems = [
     { key: 'inventory', icon: '📦', label: 'Inventario' },
-    { key: 'orders',    icon: '🛍️',  label: 'Órdenes',  badge: pendingOrders },
-    { key: 'income',    icon: '💰',  label: 'Ingresos' },
-    { key: 'reports',   icon: '📜',  label: 'Reportes' },
-    { key: 'options',   icon: '⚙️',  label: 'Opciones' },
+    { key: 'orders', icon: '🛍️', label: 'Órdenes', badge: pendingOrders },
+    { key: 'income', icon: '💰', label: 'Ingresos' },
+    { key: 'reports', icon: '📜', label: 'Reportes' },
+    { key: 'options', icon: '⚙️', label: 'Opciones' },
   ];
 
   return (

@@ -40,6 +40,11 @@ async function initDb() {
             );
         `);
 
+        // Migraciones: añade columnas faltantes en tablas existentes (seguro en producción)
+        await pool.query(`ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen TEXT;`);
+        await pool.query(`ALTER TABLE productos ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'unidad';`);
+        await pool.query(`ALTER TABLE productos ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMPTZ DEFAULT NOW();`);
+
         await pool.query(`
             CREATE TABLE IF NOT EXISTS ventas (
                 id SERIAL PRIMARY KEY,
