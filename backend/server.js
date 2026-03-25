@@ -2,11 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuración de la Base de Datos
 const pool = new Pool({
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT) || 5432,
@@ -15,7 +16,6 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD,
 });
 
-// Test de Conexión Detallado
 console.log('--------------------------------------------------');
 console.log('📡 Intentando conectar a PostgreSQL en:');
 console.log(`   Host: ${process.env.DB_HOST}`);
@@ -27,258 +27,372 @@ console.log('--------------------------------------------------');
 pool.connect((err, client, release) => {
     if (err) {
         console.error('❌ ERROR FATAL DB:', err.message);
-        console.error('🔍 Sugerencia: Revisa si el host y puerto son accesibles desde el contenedor.');
     } else {
         console.log('✅ DB CONECTADA EXITOSAMENTE');
         release();
+        // Crear tabla de órdenes si no existe
+        pool.query(`
+            CREATE TABLE IF NOT EXISTS ordenes (
+                id SERIAL PRIMARY KEY,
+                numero_orden TEXT UNIQUE NOT NULL,
+                cliente_nombre TEXT NOT NULL,
+                cliente_telefono TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'pendiente',
+                items JSONB NOT NULL,
+                total NUMERIC(12,2) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `).then(() => console.log('✅ Tabla ordenes lista'))
+          .catch(e => console.error('❌ Error creando tabla ordenes:', e.message));
     }
 });
 
 // Middlewares
 app.use(cors());
 app.use(express.json());
+app.use('/asset', express.static(path.join(__dirname, 'asset')));
 
-// Middleware de Logging (Muestra cada petición)
-app.use((req, res, next) => {
-    const time = new Date().toLocaleTimeString();
-    console.log(`[${time}] ${req.method} ${req.url}`);
-    if (Object.keys(req.body).length > 0) {
-        console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+// Multer
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'asset/'),
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + path.extname(file.originalname));
     }
+});
+const upload = multer({ storage });
+
+// Logging
+app.use((req, res, next) => {
+    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
     next();
 });
 
-// API Endpoints
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date(),
-        env_check: {
-            db_host: !!process.env.DB_HOST,
-            db_name: !!process.env.DB_NAME
-        }
-    });
-});
+// ─── HEALTH ──────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
-// Endpoint para verificar DB manualmente
 app.get('/api/db-status', async (req, res) => {
     try {
-        const start = Date.now();
-        const result = await pool.query('SELECT NOW() as now, version() as version');
-        const duration = Date.now() - start;
-        res.json({
-            status: 'connected',
-            time_on_db: result.rows[0].now,
-            version: result.rows[0].version,
-            latency: `${duration}ms`,
-            config: {
-                host: process.env.DB_HOST,
-                db: process.env.DB_NAME
-            }
-        });
+        const r = await pool.query('SELECT NOW() as now, version() as version');
+        res.json({ status: 'connected', time_on_db: r.rows[0].now, version: r.rows[0].version });
     } catch (err) {
-        console.error('❌ Error en /api/db-status:', err.message);
-        res.status(500).json({
-            status: 'error',
-            message: err.message,
-            config: {
-                host: process.env.DB_HOST,
-                port: process.env.DB_PORT
-            }
-        });
+        res.status(500).json({ status: 'error', message: err.message });
     }
 });
 
-// 1. OBTENER CATEGORÍAS
-app.get('/api/categorias', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM categorias ORDER BY nombre');
-        console.log(`📂 Categorías enviadas: ${result.rows.length}`);
-        res.json(result.rows);
-    } catch (err) {
-        console.error('❌ Error /api/categorias:', err.message);
-        res.status(500).json({ error: 'Error al obtener categorías' });
-    }
-});
+// ─── CATEGORÍAS ───────────────────────────────────────
+app.get('/api/categorias', (req, res) => res.json([{ id: 'productos', nombre: 'Productos' }]));
 
-// 2. OBTENER PRODUCTOS (Con filtros y búsqueda)
+// ─── PRODUCTOS ────────────────────────────────────────
 app.get('/api/productos', async (req, res) => {
     try {
-        const { search, category, sort } = req.query;
-        let query = `
-            SELECT p.*, c.nombre AS categoria_nombre 
-            FROM productos p 
-            LEFT JOIN categorias c ON p.categoria = c.id
-        `;
+        const { search, sort } = req.query;
+        let query = `SELECT p.*, 'Productos' AS categoria_nombre FROM productos p`;
         const values = [];
-        const conditions = [];
-
         if (search) {
             values.push(`%${search.toLowerCase()}%`);
-            conditions.push(`(LOWER(p.nombre) LIKE $${values.length} OR LOWER(p.sku) LIKE $${values.length})`);
+            query += ` WHERE (LOWER(p.nombre) LIKE $1 OR LOWER(p.sku) LIKE $1)`;
         }
-
-        if (category) {
-            values.push(category);
-            conditions.push(`p.categoria = $${values.length}`);
-        }
-
-        if (conditions.length > 0) {
-            query += ' WHERE ' + conditions.join(' AND ');
-        }
-
-        // Ordenamiento
-        const sortOptions = {
-            nombre: 'p.nombre ASC',
-            price_asc: 'p.precio ASC',
-            price_desc: 'p.precio DESC',
-            stock_asc: 'p.stock ASC',
-            stock_desc: 'p.stock DESC'
-        };
+        const sortOptions = { nombre: 'p.nombre ASC', price_asc: 'p.precio ASC', price_desc: 'p.precio DESC' };
         query += ` ORDER BY ${sortOptions[sort] || 'p.nombre ASC'}`;
-
         const result = await pool.query(query, values);
-        console.log(`📦 Productos enviados: ${result.rows.length} (Filtros: ${JSON.stringify(req.query)})`);
         res.json(result.rows);
     } catch (err) {
-        console.error('❌ Error /api/productos:', err.message);
         res.status(500).json({ error: 'Error al obtener productos' });
     }
 });
 
-// 3. ESTADÍSTICAS / RESUMEN
+// ─── STATS ────────────────────────────────────────────
 app.get('/api/stats/resumen', async (req, res) => {
     try {
-        const query = `
-            SELECT 
-                COUNT(*)::int AS total_productos, 
-                COALESCE(SUM(stock), 0)::int AS total_stock, 
-                COALESCE(SUM(precio * stock), 0)::numeric(12,2) AS valor_inventario, 
-                COUNT(*) FILTER (WHERE stock = 0)::int AS sin_stock, 
-                COUNT(*) FILTER (WHERE stock <= 5 AND stock > 0)::int AS stock_bajo 
+        const r = await pool.query(`
+            SELECT COUNT(*)::int AS total_productos,
+                   COALESCE(SUM(stock),0)::int AS total_stock,
+                   COALESCE(SUM(precio*stock),0)::numeric(12,2) AS valor_inventario,
+                   COUNT(*) FILTER (WHERE stock=0)::int AS sin_stock,
+                   COUNT(*) FILTER (WHERE stock<=5 AND stock>0)::int AS stock_bajo
             FROM productos
-        `;
-        const result = await pool.query(query);
-        res.json(result.rows[0]);
+        `);
+        res.json(r.rows[0]);
     } catch (err) {
-        console.error('❌ Error /api/stats/resumen:', err.message);
         res.status(500).json({ error: 'Error al obtener resumen' });
     }
 });
 
-// 4. ESTADÍSTICAS POR CATEGORÍA
-app.get('/api/stats/por-categoria', async (req, res) => {
-    try {
-        const query = `
-            SELECT c.id, c.nombre, COUNT(p.id)::int AS total 
-            FROM categorias c 
-            LEFT JOIN productos p ON p.categoria = c.id 
-            GROUP BY c.id, c.nombre
-        `;
-        const result = await pool.query(query);
-        res.json(result.rows);
-    } catch (err) {
-        console.error('❌ Error /api/stats/por-categoria:', err.message);
-        res.status(500).json({ error: 'Error al obtener estadísticas por categoría' });
-    }
-});
-
-// 5. AGREGAR PRODUCTO
-app.post('/api/productos', async (req, res) => {
+// ─── CREAR PRODUCTO ───────────────────────────────────
+app.post('/api/productos', upload.single('imagen'), async (req, res) => {
     try {
         const { nombre, descripcion, categoria, precio, stock, sku, unidad } = req.body;
-        const query = `
-            INSERT INTO productos (nombre, descripcion, categoria, precio, stock, sku, unidad) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7) 
-            RETURNING *
-        `;
-        const result = await pool.query(query, [
-            nombre, descripcion, categoria, precio, stock, sku.toUpperCase(), unidad || 'unidad'
-        ]);
-        console.log('✅ Producto creado:', result.rows[0].nombre);
-        res.status(201).json(result.rows[0]);
+        const imagen = req.file ? req.file.filename : null;
+        const r = await pool.query(
+            `INSERT INTO productos (nombre,descripcion,categoria,precio,stock,sku,unidad,imagen)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+            [nombre, descripcion, categoria || 'productos', precio, stock, sku.toUpperCase(), unidad || 'unidad', imagen]
+        );
+        res.status(201).json(r.rows[0]);
     } catch (err) {
-        console.error('❌ Error POST /api/productos:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-// 5. ACTUALIZAR PRODUCTO
-app.put('/api/productos/:id', async (req, res) => {
+// ─── ACTUALIZAR PRODUCTO (FIX: image preserved if no new file) ────────────
+app.put('/api/productos/:id', upload.single('imagen'), async (req, res) => {
     try {
         const { nombre, descripcion, categoria, precio, stock, sku, unidad } = req.body;
-        const query = `
-            UPDATE productos 
-            SET nombre=$1, descripcion=$2, categoria=$3, precio=$4, stock=$5, sku=$6, unidad=$7, actualizado_en=NOW() 
-            WHERE id=$8 
-            RETURNING *
-        `;
-        const result = await pool.query(query, [
-            nombre, descripcion, categoria, precio, stock, sku.toUpperCase(), unidad, req.params.id
-        ]);
-        console.log('✅ Producto actualizado ID:', req.params.id);
-        res.json(result.rows[0]);
+
+        // If no new file uploaded, fetch the existing image from DB
+        let imagen;
+        if (req.file) {
+            imagen = req.file.filename;
+        } else {
+            const existing = await pool.query('SELECT imagen FROM productos WHERE id=$1', [req.params.id]);
+            imagen = existing.rows[0]?.imagen || null;
+        }
+
+        const r = await pool.query(
+            `UPDATE productos SET nombre=$1,descripcion=$2,categoria=$3,precio=$4,stock=$5,
+             sku=$6,unidad=$7,imagen=$8,actualizado_en=NOW() WHERE id=$9 RETURNING *`,
+            [nombre, descripcion, categoria || 'productos', precio, stock, sku.toUpperCase(), unidad, imagen, req.params.id]
+        );
+        res.json(r.rows[0]);
     } catch (err) {
-        console.error(`❌ Error PUT /api/productos/${req.params.id}:`, err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-// 6. ELIMINAR PRODUCTO
+// ─── ELIMINAR PRODUCTO ────────────────────────────────
 app.delete('/api/productos/:id', async (req, res) => {
     try {
         await pool.query('DELETE FROM productos WHERE id=$1', [req.params.id]);
-        console.log('🗑️ Producto eliminado ID:', req.params.id);
-        res.json({ success: true, message: `Producto ${req.params.id} eliminado` });
+        res.json({ success: true });
     } catch (err) {
-        console.error(`❌ Error DELETE /api/productos/${req.params.id}:`, err.message);
         res.status(500).json({ error: 'Error al eliminar producto' });
     }
 });
 
-// 7. REALIZAR VENTA (Descontar inventario)
+// ─── VENTAS (Admin directo) ───────────────────────────
 app.post('/api/ventas', async (req, res) => {
     const client = await pool.connect();
     try {
-        const { items } = req.body; // Array de { id, cantidad }
-
-        if (!items || !Array.isArray(items) || items.length === 0) {
+        const { items, metodo_pago } = req.body;
+        if (!items || !Array.isArray(items) || items.length === 0)
             return res.status(400).json({ error: 'No hay items en la venta' });
-        }
 
         await client.query('BEGIN');
+        let total = 0;
+        const itemsConPrecio = [];
 
         for (const item of items) {
-            // Verificar stock actual
-            const resProd = await client.query('SELECT stock, nombre FROM productos WHERE id = $1 FOR UPDATE', [item.id]);
+            const rp = await client.query('SELECT stock,nombre,precio FROM productos WHERE id=$1 FOR UPDATE', [item.id]);
+            if (!rp.rows.length) throw new Error(`Producto ID ${item.id} no existe`);
+            const p = rp.rows[0];
+            if (p.stock < item.cantidad) throw new Error(`Stock insuficiente para "${p.nombre}"`);
+            total += item.cantidad * p.precio;
+            itemsConPrecio.push({ ...item, precio_unitario: p.precio });
+            await client.query('UPDATE productos SET stock=stock-$1,actualizado_en=NOW() WHERE id=$2', [item.cantidad, item.id]);
+        }
 
-            if (resProd.rows.length === 0) {
-                throw new Error(`Producto ID ${item.id} no encontrado`);
-            }
+        const rv = await client.query('INSERT INTO ventas (total,metodo_pago) VALUES ($1,$2) RETURNING id', [total, metodo_pago || 'efectivo']);
+        const ventaId = rv.rows[0].id;
 
-            const currentStock = resProd.rows[0].stock;
-            const productName = resProd.rows[0].nombre;
-
-            if (currentStock < item.cantidad) {
-                throw new Error(`Stock insuficiente para "${productName}". Disponible: ${currentStock}, Solicitado: ${item.cantidad}`);
-            }
-
-            // Descontar stock
+        for (const item of itemsConPrecio) {
             await client.query(
-                'UPDATE productos SET stock = stock - $1, actualizado_en = NOW() WHERE id = $2',
-                [item.cantidad, item.id]
+                'INSERT INTO venta_items (venta_id,producto_id,cantidad,precio_unitario) VALUES ($1,$2,$3,$4)',
+                [ventaId, item.id, item.cantidad, item.precio_unitario]
             );
         }
 
         await client.query('COMMIT');
-        console.log('✅ Venta realizada con éxito. Items:', items.length);
-        res.json({ success: true, message: 'Venta procesada correctamente' });
+        res.json({ success: true, ventaId, total });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('❌ Error POST /api/ventas:', err.message);
         res.status(400).json({ error: err.message });
     } finally {
         client.release();
+    }
+});
+
+// ─── ÓRDENES (Clientes desde landing) ────────────────
+
+// Crear orden pendiente
+app.post('/api/ordenes', async (req, res) => {
+    try {
+        const { cliente_nombre, cliente_telefono, items } = req.body;
+        if (!cliente_nombre || !cliente_telefono || !items?.length)
+            return res.status(400).json({ error: 'Faltan datos de la orden' });
+
+        // Calcular total con precios actuales
+        let total = 0;
+        const itemsEnriquecidos = [];
+        for (const item of items) {
+            const r = await pool.query('SELECT nombre,precio FROM productos WHERE id=$1', [item.id]);
+            if (!r.rows.length) return res.status(400).json({ error: `Producto ${item.id} no existe` });
+            const precio = Number(r.rows[0].precio);
+            total += precio * item.cantidad;
+            itemsEnriquecidos.push({ id: item.id, nombre: r.rows[0].nombre, cantidad: item.cantidad, precio_unitario: precio, subtotal: precio * item.cantidad });
+        }
+
+        // Generar número de orden único
+        const numero_orden = 'ORD-' + Date.now().toString().slice(-6);
+
+        const r = await pool.query(
+            `INSERT INTO ordenes (numero_orden,cliente_nombre,cliente_telefono,estado,items,total)
+             VALUES ($1,$2,$3,'pendiente',$4,$5) RETURNING *`,
+            [numero_orden, cliente_nombre.trim(), cliente_telefono.trim(), JSON.stringify(itemsEnriquecidos), total]
+        );
+        res.status(201).json(r.rows[0]);
+    } catch (err) {
+        console.error('❌ POST /api/ordenes:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Obtener todas las órdenes
+app.get('/api/ordenes', async (req, res) => {
+    try {
+        const r = await pool.query(`SELECT * FROM ordenes ORDER BY created_at DESC`);
+        res.json(r.rows);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener órdenes' });
+    }
+});
+
+// Confirmar orden → ejecuta la venta real y descuenta stock
+app.put('/api/ordenes/:id/confirmar', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        // Obtener orden
+        const ro = await client.query('SELECT * FROM ordenes WHERE id=$1', [req.params.id]);
+        if (!ro.rows.length) return res.status(404).json({ error: 'Orden no encontrada' });
+        const orden = ro.rows[0];
+        if (orden.estado !== 'pendiente') return res.status(400).json({ error: 'Esta orden ya fue procesada' });
+
+        const items = orden.items;
+
+        await client.query('BEGIN');
+        let totalVenta = 0;
+        const itemsConPrecio = [];
+
+        for (const item of items) {
+            const rp = await client.query('SELECT stock,nombre,precio FROM productos WHERE id=$1 FOR UPDATE', [item.id]);
+            if (!rp.rows.length) throw new Error(`Producto ${item.id} no existe`);
+            const p = rp.rows[0];
+            if (p.stock < item.cantidad) throw new Error(`Stock insuficiente para "${p.nombre}". Disponible: ${p.stock}`);
+            totalVenta += item.cantidad * p.precio;
+            itemsConPrecio.push({ ...item, precio_unitario: p.precio });
+            await client.query('UPDATE productos SET stock=stock-$1,actualizado_en=NOW() WHERE id=$2', [item.cantidad, item.id]);
+        }
+
+        // Insertar venta real
+        const rv = await client.query(
+            `INSERT INTO ventas (total,metodo_pago) VALUES ($1,'orden_cliente') RETURNING id`,
+            [totalVenta]
+        );
+        const ventaId = rv.rows[0].id;
+        for (const item of itemsConPrecio) {
+            await client.query(
+                'INSERT INTO venta_items (venta_id,producto_id,cantidad,precio_unitario) VALUES ($1,$2,$3,$4)',
+                [ventaId, item.id, item.cantidad, item.precio_unitario]
+            );
+        }
+
+        // Marcar orden como confirmada
+        await client.query(`UPDATE ordenes SET estado='confirmada' WHERE id=$1`, [req.params.id]);
+
+        await client.query('COMMIT');
+        res.json({ success: true, ventaId, total: totalVenta });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Limpiar todas las órdenes de clientes (DEBE ir ANTES de /:id)
+app.delete('/api/ordenes/limpiar', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM ordenes');
+        res.json({ success: true, message: 'Órdenes eliminadas' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Cancelar/rechazar orden individual
+app.delete('/api/ordenes/:id', async (req, res) => {
+    try {
+        await pool.query(`UPDATE ordenes SET estado='cancelada' WHERE id=$1`, [req.params.id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al cancelar orden' });
+    }
+});
+
+
+// Limpiar historial de ventas (reportes)
+app.delete('/api/reportes/limpiar', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM venta_items');
+        await client.query('DELETE FROM ventas');
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Historial de ventas eliminado' });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Ingresos vienen de ventas (misma tabla) — alias
+app.delete('/api/ingresos/limpiar', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM venta_items');
+        await client.query('DELETE FROM ventas');
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Ingresos eliminados' });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// ─── REPORTES ─────────────────────────────────────────
+app.get('/api/reportes/ventas', async (req, res) => {
+    try {
+        const r = await pool.query(`
+            SELECT v.id as venta_id, v.fecha, v.total, v.metodo_pago,
+                   json_agg(json_build_object(
+                       'nombre', p.nombre, 'cantidad', vi.cantidad,
+                       'precio_unitario', vi.precio_unitario, 'subtotal', vi.subtotal
+                   )) as items
+            FROM ventas v
+            JOIN venta_items vi ON v.id=vi.venta_id
+            JOIN productos p ON vi.producto_id=p.id
+            GROUP BY v.id ORDER BY v.fecha DESC
+        `);
+        res.json(r.rows);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener reporte de ventas' });
+    }
+});
+
+app.get('/api/reportes/ingresos', async (req, res) => {
+    try {
+        const r = await pool.query(`
+            SELECT TO_CHAR(fecha,'YYYY-MM-DD') as dia, SUM(total) as total_dia, COUNT(id) as num_ventas
+            FROM ventas GROUP BY dia ORDER BY dia DESC LIMIT 30
+        `);
+        res.json(r.rows);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener ingresos' });
     }
 });
 

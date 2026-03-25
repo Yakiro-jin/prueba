@@ -1,674 +1,721 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { HashRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import './App.css';
 
-// ─── CONFIG ─────────────────────────────────────────
-// En desarrollo (npm start) el proxy de package.json redirige /api → http://localhost:3001
-// En producción (Docker) el frontend llama directamente al backend
 const API_BASE = process.env.REACT_APP_API_URL || '/api';
-
-// ─── CATEGORÍAS (visual, sincronizadas con la DB) ────
-const CAT_META = {
-  electronics: { icon: '💻', color: '#a78bfa' },
-  clothing: { icon: '👕', color: '#f59e0b' },
-  food: { icon: '🍎', color: '#22c55e' },
-  tools: { icon: '🔧', color: '#f75555' },
-  others: { icon: '🗂️', color: '#8b949e' },
-};
-
-const ALL_CAT = { id: 'all', nombre: 'Todos', icono: '📦', color: '#4f8ef7' };
 const UNITS = ['unidad', 'caja', 'bolsa', 'botella', 'kg', 'litro', 'metro', 'par', 'rollo'];
-const EMPTY_PRODUCT = { nombre: '', descripcion: '', categoria: 'others', precio: '', stock: '', sku: '', unidad: 'unidad' };
+const EMPTY_PRODUCT = { nombre: '', descripcion: '', categoria: 'productos', precio: '', stock: '', sku: '', unidad: 'unidad', imagen: null };
 
-// ─── HELPERS ─────────────────────────────────────────
-function getCatIcon(cat) { return CAT_META[cat]?.icon || '🗂️'; }
-function getCatColor(cat) { return CAT_META[cat]?.color || '#8b949e'; }
 function getStockClass(s) { return s === 0 ? 'stock-out' : s <= 5 ? 'stock-low' : 'stock-ok'; }
-function getStockLabel(s) { return s === 0 ? '⚫ Sin stock' : s <= 5 ? '🟡 Bajo' : '🟢 OK'; }
-function formatPrice(p) { return `$${Number(p).toFixed(2)}`; }
+function formatPrice(p) { return `USD ${Number(p).toLocaleString('en-US', { minimumFractionDigits: 2 })}`; }
+function fmtDate(d) { return new Date(d).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }); }
 
-// ─── FETCH HELPERS ────────────────────────────────────
 async function apiFetch(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
+  const isFormData = options.body instanceof FormData;
+  const headers = { ...options.headers };
+  if (!isFormData && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
   return data;
 }
 
-// ─── TOAST ───────────────────────────────────────────
+/* ─── PDF HELPER ────────────────────────────────────────────── */
+function openPrintWindow(title, html) {
+  const win = window.open('', '_blank', 'width=900,height=700');
+  win.document.write(`<!DOCTYPE html><html>
+  <head><meta charset="UTF-8"><title>${title}</title>
+  <style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#111}
+    h1{font-size:20px;margin-bottom:4px}p{color:#666;font-size:12px;margin-bottom:16px}
+    table{width:100%;border-collapse:collapse}
+    th{background:#1a1a2e;color:#fff;padding:10px 14px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:1px}
+    td{padding:10px 14px;border-bottom:1px solid #eee;font-size:13px}
+    tr:nth-child(even) td{background:#f8f8f8}
+    .total{font-weight:bold;color:#4169e1}
+    @media print{button{display:none}}
+  </style></head><body>
+  <h1>${title}</h1>
+  <p>Generado: ${new Date().toLocaleString('es-VE')} | InvenPro Premium</p>
+  <button onclick="window.print()" style="margin-bottom:16px;padding:8px 20px;background:#4169e1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Imprimir / Guardar PDF</button>
+  ${html}
+  </body></html>`);
+  win.document.close();
+}
+
+/* ─── TOAST ──────────────────────────────────────────────────── */
 function Toast({ toasts }) {
   return (
     <div className="toast-wrap">
       {toasts.map(t => (
-        <div key={t.id} className={`toast toast-${t.type}`}>
-          <span>{t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : 'ℹ️'}</span>
-          {t.message}
+        <div key={t.id} className={`toast toast-${t.type} glass`}>
+          <span className="icon">{t.type === 'success' ? '✨' : t.type === 'error' ? '🚫' : '🔔'}</span>
+          <span className="msg">{t.message}</span>
         </div>
       ))}
     </div>
   );
 }
 
-// ─── MODAL PRODUCTO ───────────────────────────────────
-function ProductModal({ product, categories, onSave, onClose }) {
-  const [form, setForm] = useState(
-    product
-      ? { ...product, precio: product.precio, stock: product.stock }
-      : { ...EMPTY_PRODUCT }
+/* ─── HERO ───────────────────────────────────────────────────── */
+function Hero() {
+  return (
+    <div className="hero-section glass-dark">
+      <div className="hero-content fade-in">
+        <h1 className="hero-title">InvenPro <span className="gradient-text">Premium</span></h1>
+        <p className="hero-subtitle">Gestión inteligente para negocios de clase mundial.</p>
+        <div className="hero-features">
+          {['⚡ Agilidad', '💎 Exclusividad', '📦 Precisión'].map(t => <span key={t} className="hero-tag">{t}</span>)}
+        </div>
+      </div>
+    </div>
   );
-  const [errors, setErrors] = useState({});
+}
+
+/* ─── PRODUCT MODAL ──────────────────────────────────────────── */
+function ProductModal({ product, onSave, onDelete, onClose }) {
+  const [form, setForm] = useState(product ? { ...product } : { ...EMPTY_PRODUCT });
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(product?.imagen ? `${API_BASE}/../asset/${product.imagen}` : null);
   const [loading, setLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const validate = () => {
-    const e = {};
-    if (!form.nombre?.trim()) e.nombre = 'Requerido';
-    if (!form.precio || isNaN(form.precio) || Number(form.precio) < 0) e.precio = 'Precio inválido';
-    if (form.stock === '' || isNaN(form.stock) || Number(form.stock) < 0) e.stock = 'Stock inválido';
-    if (!form.sku?.trim()) e.sku = 'Requerido';
-    return e;
-  };
-
-  const handleChange = (field, value) => {
-    setForm(f => ({ ...f, [field]: value }));
-    if (errors[field]) setErrors(e => ({ ...e, [field]: undefined }));
-  };
-
-  const handleSubmit = async () => {
-    const e = validate();
-    if (Object.keys(e).length > 0) { setErrors(e); return; }
+  const submit = async () => {
     setLoading(true);
-    await onSave({
-      ...form,
-      precio: Number(form.precio),
-      stock: Number(form.stock),
-    });
+    const fd = new FormData();
+    Object.keys(form).forEach(k => { if (k !== 'imagen' && k !== 'id') fd.append(k, form[k]); });
+    if (file) fd.append('imagen', file);
+    await onSave(fd, form.id);
     setLoading(false);
   };
 
-  const isEdit = Boolean(product?.id);
-
   return (
-    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal glass-light slide-up">
         <div className="modal-header">
-          <span className="modal-title">{isEdit ? '✏️ Editar Producto' : '➕ Nuevo Producto'}</span>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <h3>{product ? '📦 Detalles del Artículo' : '✨ Nuevo Ingreso'}</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        <div className="modal-body">
-          <div className="form-grid">
-            <div className="form-group full">
-              <label className="form-label">Nombre del producto *</label>
-              <input className="form-input" value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} placeholder="Ej: Resma de papel A4" />
-              {errors.nombre && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{errors.nombre}</span>}
+        <div className="modal-body compact-form">
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Nombre Comercial</label>
+              <input value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} placeholder="Ej: Laptop XPS 13" />
             </div>
-            <div className="form-group full">
-              <label className="form-label">Descripción</label>
-              <textarea className="form-textarea" value={form.descripcion} onChange={e => handleChange('descripcion', e.target.value)} placeholder="Descripción breve..." />
+            <div className="form-group flex-1">
+              <label>SKU</label>
+              <input value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value.toUpperCase() })} placeholder="ABS-123" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Descripción</label>
+            <textarea value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} rows="2" placeholder="Detalles clave..." />
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Precio</label>
+              <input type="number" value={form.precio} onChange={e => setForm({ ...form, precio: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="form-label">Categoría</label>
-              <select className="form-select" value={form.categoria} onChange={e => handleChange('categoria', e.target.value)}>
-                {categories.map(c => (
-                  <option key={c.id} value={c.id}>{getCatIcon(c.id)} {c.nombre}</option>
-                ))}
-              </select>
+              <label>Existencias</label>
+              <input type="number" value={form.stock} onChange={e => setForm({ ...form, stock: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="form-label">SKU / Código *</label>
-              <input className="form-input" value={form.sku} onChange={e => handleChange('sku', e.target.value.toUpperCase())} placeholder="Ej: PAP-001" />
-              {errors.sku && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{errors.sku}</span>}
-            </div>
-            <div className="form-group">
-              <label className="form-label">Precio ($) *</label>
-              <input className="form-input" type="number" min="0" step="0.01" value={form.precio} onChange={e => handleChange('precio', e.target.value)} placeholder="0.00" />
-              {errors.precio && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{errors.precio}</span>}
-            </div>
-            <div className="form-group">
-              <label className="form-label">Stock *</label>
-              <input className="form-input" type="number" min="0" value={form.stock} onChange={e => handleChange('stock', e.target.value)} placeholder="0" />
-              {errors.stock && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{errors.stock}</span>}
-            </div>
-            <div className="form-group">
-              <label className="form-label">Unidad</label>
-              <select className="form-select" value={form.unidad} onChange={e => handleChange('unidad', e.target.value)}>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              <label>Presentación</label>
+              <select value={form.unidad} onChange={e => setForm({ ...form, unidad: e.target.value })}>
+                {UNITS.map(u => <option key={u}>{u}</option>)}
               </select>
             </div>
           </div>
+          <div className="form-group">
+            <label>Fotografía {product?.imagen && !file && <span className="img-preserved-tag">✓ conservada</span>}</label>
+            <div className="img-dropzone glass" onClick={() => document.getElementById('modal-img-input').click()}>
+              {preview ? <img src={preview} alt="preview" /> : <div className="drop-placeholder"><span>📸 Clic para cargar</span></div>}
+              <input id="modal-img-input" type="file" onChange={e => { const f = e.target.files[0]; if (f) { setFile(f); setPreview(URL.createObjectURL(f)); } }} hidden />
+            </div>
+          </div>
         </div>
-        <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={onClose} disabled={loading}>Cancelar</button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
-            {loading ? '⏳ Guardando...' : isEdit ? 'Guardar cambios' : 'Agregar producto'}
-          </button>
+        <div className="modal-footer-polish">
+          {product && !confirmDelete && (
+            <button className="btn btn-danger-link" onClick={e => { e.stopPropagation(); setConfirmDelete(true); }}>🗑️ Eliminar</button>
+          )}
+          {confirmDelete ? (
+            <div className="confirm-delete-alert fade-in">
+              <span className="alert-text">¿Confirmar eliminación?</span>
+              <div className="alert-btns">
+                <button className="btn btn-danger-solid" onClick={() => onDelete(product)}>Sí, Borrar</button>
+                <button className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>Volver</button>
+              </div>
+            </div>
+          ) : (
+            <div className="footer-actions-right">
+              <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+              <button className="btn btn-primary" onClick={submit} disabled={loading}>{loading ? '...' : 'Confirmar'}</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── CONFIRM DIALOG ───────────────────────────────────
-function ConfirmDialog({ message, onConfirm, onCancel, loading }) {
+/* ─── CHECKOUT FORM ──────────────────────────────────────────── */
+function CheckoutForm({ cart, onSuccess, onBack, addToast }) {
+  const [nombre, setNombre] = useState('');
+  const [telefono, setTelefono] = useState('');
+  const [loading, setLoading] = useState(false);
+  const total = cart.reduce((a, i) => a + i.precio * i.cantidad, 0);
+  const canSubmit = nombre.trim().length >= 2 && telefono.trim().length >= 6;
+
+  const submit = async () => {
+    setLoading(true);
+    try {
+      const order = await apiFetch('/ordenes', {
+        method: 'POST',
+        body: JSON.stringify({ cliente_nombre: nombre, cliente_telefono: telefono, items: cart.map(i => ({ id: i.id, cantidad: i.cantidad })) })
+      });
+      onSuccess(order);
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  };
+
   return (
-    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onCancel()}>
-      <div className="modal confirm-modal">
-        <div className="confirm-body">
-          <div className="confirm-icon">🗑️</div>
-          <div className="modal-title" style={{ marginBottom: 10 }}>¿Confirmar eliminación?</div>
-          <p className="confirm-text">{message}</p>
-        </div>
-        <div className="modal-footer" style={{ justifyContent: 'center' }}>
-          <button className="btn btn-secondary" onClick={onCancel} disabled={loading}>Cancelar</button>
-          <button className="btn btn-danger" onClick={onConfirm} disabled={loading}>
-            {loading ? '⏳ Eliminando...' : 'Sí, eliminar'}
-          </button>
-        </div>
+    <div className="checkout-form-wrap fade-in">
+      <div className="checkout-summary glass">
+        {cart.map(i => (
+          <div key={i.id} className="checkout-item-row">
+            <span>{i.nombre} <span className="qty-tag">×{i.cantidad}</span></span>
+            <span>{formatPrice(i.precio * i.cantidad)}</span>
+          </div>
+        ))}
+        <div className="checkout-total-row"><span>Total</span><span className="bold-total">{formatPrice(total)}</span></div>
+      </div>
+      <div className="checkout-fields">
+        <div className="form-group"><label>Tu nombre completo</label><input value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Ej: María González" /></div>
+        <div className="form-group"><label>Número de teléfono</label><input type="tel" value={telefono} onChange={e => setTelefono(e.target.value)} placeholder="Ej: 0412-5551234" /></div>
+      </div>
+      <div className="checkout-actions">
+        <button className="btn btn-ghost" onClick={onBack}>← Volver</button>
+        <button className="btn btn-primary premium-shadow full" onClick={submit} disabled={!canSubmit || loading}>{loading ? 'Enviando...' : '📨 Enviar Pedido'}</button>
       </div>
     </div>
   );
 }
 
-// ─── MAIN APP ─────────────────────────────────────────
-function App() {
-  const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [catStats, setCatStats] = useState({});
+/* ─── ORDER SUCCESS ──────────────────────────────────────────── */
+function OrderSuccessScreen({ order, onClose }) {
+  return (
+    <div className="order-success-screen fade-in">
+      <div className="success-icon">🎉</div>
+      <h3>¡Pedido Enviado!</h3>
+      <p>Tu número de orden es:</p>
+      <div className="order-number-pill">{order.numero_orden}</div>
+      <p className="success-note">Un representante confirmará tu pedido pronto. Guarda tu número de referencia.</p>
+      <button className="btn btn-primary premium-shadow" onClick={onClose}>Listo</button>
+    </div>
+  );
+}
+
+/* ─── ADMIN ORDERS TAB ───────────────────────────────────────── */
+function AdminOrdenesTab({ addToast, onRefreshStats }) {
+  const [orders, setOrders] = useState([]);
+  const [expanded, setExpanded] = useState({});
   const [loading, setLoading] = useState(true);
-  const [apiError, setApiError] = useState(null);
 
+  const fetchOrders = useCallback(async () => {
+    setLoading(true);
+    try { setOrders(await apiFetch('/ordenes')); }
+    catch (e) { addToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  }, [addToast]);
+
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  const confirmar = async (id) => {
+    try { await apiFetch(`/ordenes/${id}/confirmar`, { method: 'PUT' }); addToast('✅ Venta confirmada'); fetchOrders(); onRefreshStats(); }
+    catch (e) { addToast(e.message, 'error'); }
+  };
+  const cancelar = async (id) => {
+    try { await apiFetch(`/ordenes/${id}`, { method: 'DELETE' }); addToast('Orden cancelada'); fetchOrders(); }
+    catch (e) { addToast(e.message, 'error'); }
+  };
+
+  const statusColors = { pendiente: 'status-pending', confirmada: 'status-confirmed', cancelada: 'status-cancelled' };
+  const statusLabels = { pendiente: '⏳ Pendiente', confirmada: '✅ Confirmada', cancelada: '❌ Cancelada' };
+  const pending = orders.filter(o => o.estado === 'pendiente').length;
+
+  if (loading) return <div className="loading-state">Cargando órdenes...</div>;
+  return (
+    <div className="orders-admin-layout fade-in">
+      <div className="view-header">
+        <h3>🛍️ Órdenes {pending > 0 && <span className="pending-badge">{pending} pendientes</span>}</h3>
+        <button className="btn btn-ghost" onClick={fetchOrders}>↺ Actualizar</button>
+      </div>
+      {orders.length === 0 ? <div className="empty-state"><h3>Sin órdenes</h3><p>Las órdenes de clientes aparecerán aquí.</p></div> : (
+        <div className="orders-grid">
+          {orders.map(o => {
+            const exp = expanded[o.id];
+            return (
+              <div key={o.id} className={`order-admin-card glass-light ${o.estado}`}>
+                <div className="order-admin-head" onClick={() => setExpanded(p => ({ ...p, [o.id]: !p[o.id] }))}>
+                  <div className="order-id-col"><span className="order-num">{o.numero_orden}</span><span className={`status-pill ${statusColors[o.estado]}`}>{statusLabels[o.estado]}</span></div>
+                  <div className="order-client-col"><span className="client-name">👤 {o.cliente_nombre}</span><span className="client-phone">📞 {o.cliente_telefono}</span></div>
+                  <div className="order-total-col"><span className="order-total-amount">{formatPrice(o.total)}</span><span className="order-date">{fmtDate(o.created_at)}</span></div>
+                  <span className="order-toggle-arrow">{exp ? '▲' : '▼'}</span>
+                </div>
+                {exp && (
+                  <div className="order-admin-body slide-down">
+                    <table className="detail-pro-table">
+                      <thead><tr><th>Artículo</th><th>Cant.</th><th>P/U</th><th>Subtotal</th></tr></thead>
+                      <tbody>{o.items.map((item, idx) => <tr key={idx}><td>{item.nombre}</td><td>×{item.cantidad}</td><td>{formatPrice(item.precio_unitario)}</td><td>{formatPrice(item.subtotal)}</td></tr>)}</tbody>
+                    </table>
+                    {o.estado === 'pendiente' && (
+                      <div className="order-admin-actions">
+                        <button className="btn btn-danger-solid" onClick={() => cancelar(o.id)}>❌ Cancelar</button>
+                        <button className="btn btn-success premium-shadow" onClick={() => confirmar(o.id)}>✅ Confirmar Venta</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── OPCIONES TAB ───────────────────────────────────────────── */
+function OpcionesTab({ addToast, onRefreshAll }) {
+  const [confirm, setConfirm] = useState(null); // which action is being confirmed
+
+  const clearAction = async (endpoint, label) => {
+    try {
+      await apiFetch(endpoint, { method: 'DELETE' });
+      addToast(`${label} limpiados correctamente`);
+      setConfirm(null);
+      onRefreshAll();
+    } catch (e) { addToast(e.message, 'error'); }
+  };
+
+  const downloadPDF = async (fetchPath, title, buildTable) => {
+    try {
+      addToast('Generando PDF...');
+      const data = await apiFetch(fetchPath);
+      const tableHtml = buildTable(data);
+      openPrintWindow(title, tableHtml);
+    } catch (e) { addToast(e.message, 'error'); }
+  };
+
+  const ordenesPDF = () => downloadPDF('/ordenes', 'Listado de Órdenes', data => {
+    const rows = data.map(o => `<tr><td>${o.numero_orden}</td><td>${o.cliente_nombre}</td><td>${o.cliente_telefono}</td><td>${o.estado}</td><td class="total">${formatPrice(o.total)}</td><td>${fmtDate(o.created_at)}</td></tr>`).join('');
+    return `<table><thead><tr><th>Orden</th><th>Cliente</th><th>Teléfono</th><th>Estado</th><th>Total</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
+  });
+
+  const reportesPDF = () => downloadPDF('/reportes/ventas', 'Historial de Ventas', data => {
+    const rows = data.map(v => `<tr><td>#${v.venta_id}</td><td>${fmtDate(v.fecha)}</td><td>${v.metodo_pago || '-'}</td><td class="total">${formatPrice(v.total)}</td></tr>`).join('');
+    return `<table><thead><tr><th>ID</th><th>Fecha</th><th>Método</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>`;
+  });
+
+  const ingresosPDF = () => downloadPDF('/reportes/ingresos', 'Ingresos por Día', data => {
+    const rows = data.map(i => `<tr><td>${i.dia}</td><td>${i.num_ventas}</td><td class="total">${formatPrice(i.total_dia)}</td></tr>`).join('');
+    return `<table><thead><tr><th>Fecha</th><th>Transacciones</th><th>Total Neto</th></tr></thead><tbody>${rows}</tbody></table>`;
+  });
+
+  const sections = [
+    {
+      key: 'ordenes', icon: '🛍️', title: 'Órdenes de Clientes',
+      desc: 'Historial de pedidos recibidos desde la landing.',
+      clearEndpoint: '/ordenes/limpiar', clearLabel: 'Órdenes',
+      downloadFn: ordenesPDF, downloadLabel: 'Descargar PDF Órdenes'
+    },
+    {
+      key: 'reportes', icon: '📜', title: 'Reportes de Ventas',
+      desc: 'Historial completo de transacciones registradas.',
+      clearEndpoint: '/reportes/limpiar', clearLabel: 'Reportes',
+      downloadFn: reportesPDF, downloadLabel: 'Descargar PDF Reportes'
+    },
+    {
+      key: 'ingresos', icon: '💰', title: 'Ingresos Diarios',
+      desc: 'Resumen de ingresos agrupados por día.',
+      clearEndpoint: '/ingresos/limpiar', clearLabel: 'Ingresos',
+      downloadFn: ingresosPDF, downloadLabel: 'Descargar PDF Ingresos'
+    }
+  ];
+
+  return (
+    <div className="opciones-layout fade-in">
+      <div className="view-header"><h3>⚙️ Opciones del Sistema</h3></div>
+      <div className="opciones-grid">
+        {sections.map(sec => (
+          <div key={sec.key} className="opcion-card glass-light">
+            <div className="opcion-header">
+              <span className="opcion-icon">{sec.icon}</span>
+              <div>
+                <div className="opcion-title">{sec.title}</div>
+                <div className="opcion-desc">{sec.desc}</div>
+              </div>
+            </div>
+            <div className="opcion-actions">
+              <button className="btn btn-primary small premium-shadow" onClick={sec.downloadFn}>
+                📥 {sec.downloadLabel}
+              </button>
+              {confirm === sec.key ? (
+                <div className="mini-confirm fade-in">
+                  <span>¿Limpiar todos los {sec.clearLabel.toLowerCase()}?</span>
+                  <button className="btn btn-danger-solid" onClick={() => clearAction(sec.clearEndpoint, sec.clearLabel)}>Confirmar</button>
+                  <button className="btn btn-ghost small" onClick={() => setConfirm(null)}>No</button>
+                </div>
+              ) : (
+                <button className="btn btn-ghost small" onClick={() => setConfirm(sec.key)}>
+                  🗑️ Limpiar {sec.clearLabel}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── MAIN APP ───────────────────────────────────────────────── */
+function AppContent() {
+  const location = useLocation();
+  const isAdminPath = location.pathname.startsWith('/admin');
+
+  const [products, setProducts] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [sortBy, setSortBy] = useState('nombre');
-  const [view, setView] = useState('table');
-
-  const [modal, setModal] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [toasts, setToasts] = useState([]);
-
-  // 🛒 Cart State
+  const [activeTab, setActiveTab] = useState('inventory');
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
-  const [checkingOut, setCheckingOut] = useState(false);
+  const [cartStep, setCartStep] = useState('cart');
+  const [completedOrder, setCompletedOrder] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [modal, setModal] = useState(null);
+  const [sales, setSales] = useState([]);
+  const [income, setIncome] = useState([]);
+  const [expandedSales, setExpandedSales] = useState({});
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+  const [pendingOrders, setPendingOrders] = useState(0);
+  const pollRef = useRef(null);
 
-  // ── Toasts
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   const addToast = useCallback((message, type = 'success') => {
     const id = Date.now();
     setToasts(t => [...t, { id, message, type }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
   }, []);
 
-  // 🛒 Cart Logic
-  const addToCart = (product) => {
-    if (product.stock <= 0) {
-      addToast('Este producto no tiene stock', 'error');
-      return;
-    }
-
-    setCart(prev => {
-      const existing = prev.find(item => item.id === product.id);
-      if (existing) {
-        if (existing.cantidad >= product.stock) {
-          addToast('No hay más stock disponible', 'error');
-          return prev;
-        }
-        return prev.map(item =>
-          item.id === product.id ? { ...item, cantidad: item.cantidad + 1 } : item
-        );
-      }
-      addToast(`"${product.nombre}" añadido al carrito`);
-      return [...prev, { ...product, cantidad: 1 }];
-    });
-  };
-
-  const removeFromCart = (productId) => {
-    setCart(prev => prev.filter(item => item.id !== productId));
-  };
-
-  const updateCartQuantity = (productId, delta) => {
-    setCart(prev => prev.map(item => {
-      if (item.id === productId) {
-        const newQty = item.cantidad + delta;
-        if (newQty <= 0) return item;
-        if (newQty > item.stock) {
-          addToast('Límite de stock alcanzado', 'error');
-          return item;
-        }
-        return { ...item, cantidad: newQty };
-      }
-      return item;
-    }));
-  };
-
-  const cartTotal = cart.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
-
-  const handleCheckout = async () => {
-    if (cart.length === 0) return;
-    setCheckingOut(true);
+  const fetchData = useCallback(async () => {
     try {
-      await apiFetch('/ventas', {
-        method: 'POST',
-        body: JSON.stringify({
-          items: cart.map(item => ({ id: item.id, cantidad: item.cantidad }))
-        }),
-      });
-      addToast('Venta realizada con éxito', 'success');
-      setCart([]);
-      setShowCart(false);
-      fetchAll();
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setCheckingOut(false);
-    }
-  };
+      const [p, s] = await Promise.all([apiFetch('/productos'), apiFetch('/stats/resumen')]);
+      setProducts(p); setStats(s);
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  }, [addToast]);
 
-  // ── Cargar datos del backend
-  const fetchAll = useCallback(async () => {
+  const fetchReports = useCallback(async () => {
     try {
-      setApiError(null);
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (selectedCategory !== 'all') params.set('category', selectedCategory);
-      params.set('sort', sortBy);
+      const [sa, inc] = await Promise.all([apiFetch('/reportes/ventas'), apiFetch('/reportes/ingresos')]);
+      setSales(sa); setIncome(inc);
+    } catch (e) { addToast(e.message, 'error'); }
+  }, [addToast]);
 
-      const [prods, cats, st, catSt] = await Promise.all([
-        apiFetch(`/productos?${params}`),
-        apiFetch('/categorias'),
-        apiFetch('/stats/resumen'),
-        apiFetch('/stats/por-categoria'),
-      ]);
-
-      setProducts(prods);
-      setCategories(cats);
-      setStats(st);
-      // Convertir array de catStats a objeto { id: total }
-      const map = {};
-      catSt.forEach(c => { map[c.id] = c.total; });
-      setCatStats(map);
-    } catch (err) {
-      setApiError(err.message);
-      addToast('No se pudo conectar con el servidor', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [search, selectedCategory, sortBy, addToast]);
+  // Poll pending orders count every 15s when on admin
+  const pollPendingOrders = useCallback(async () => {
+    if (!isAdminPath) return;
+    try {
+      const orders = await apiFetch('/ordenes');
+      setPendingOrders(orders.filter(o => o.estado === 'pendiente').length);
+    } catch (_) {}
+  }, [isAdminPath]);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
-
-  // ── CRUD
-  const handleSave = async (formData) => {
-    try {
-      if (formData.id) {
-        await apiFetch(`/productos/${formData.id}`, {
-          method: 'PUT',
-          body: JSON.stringify(formData),
-        });
-        addToast(`"${formData.nombre}" actualizado correctamente`);
-      } else {
-        await apiFetch('/productos', {
-          method: 'POST',
-          body: JSON.stringify(formData),
-        });
-        addToast(`"${formData.nombre}" agregado al inventario`);
-      }
-      setModal(null);
-      fetchAll();
-    } catch (err) {
-      addToast(err.message, 'error');
+    fetchData();
+    if (isAdminPath) {
+      pollPendingOrders();
+      pollRef.current = setInterval(pollPendingOrders, 15000);
     }
+    return () => clearInterval(pollRef.current);
+  }, [fetchData, isAdminPath, pollPendingOrders]);
+
+  useEffect(() => {
+    if (isAdminPath && (activeTab === 'reports' || activeTab === 'income')) fetchReports();
+  }, [fetchReports, isAdminPath, activeTab]);
+
+  const addToCart = (p) => {
+    const existing = cart.find(i => i.id === p.id);
+    if (p.stock <= 0 || (existing && existing.cantidad >= p.stock)) { addToast('Stock insuficiente', 'error'); return; }
+    setCart(prev => {
+      const match = prev.find(i => i.id === p.id);
+      if (match) return prev.map(i => i.id === p.id ? { ...i, cantidad: i.cantidad + 1 } : i);
+      return [...prev, { ...p, cantidad: 1 }];
+    });
+    addToast(`${p.nombre} añadido`);
   };
 
-  const handleDelete = async (product) => {
-    setDeleteLoading(true);
-    try {
-      await apiFetch(`/productos/${product.id}`, { method: 'DELETE' });
-      addToast(`"${product.nombre}" eliminado`, 'info');
-      setConfirmDelete(null);
-      fetchAll();
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setDeleteLoading(false);
-    }
+  const changeQty = (id, delta) => {
+    setCart(prev => prev.reduce((acc, i) => {
+      if (i.id !== id) return [...acc, i];
+      const newQty = i.cantidad + delta;
+      if (newQty <= 0) return acc; // remove
+      if (newQty > i.stock) return [...acc, i]; // cap at stock
+      return [...acc, { ...i, cantidad: newQty }];
+    }, []));
   };
 
-  // ── Categorías para sidebar (incluye "Todos")
-  const allCategories = [
-    ALL_CAT,
-    ...categories.map(c => ({ ...c, icon: getCatIcon(c.id), color: getCatColor(c.id) })),
+  const removeFromCart = (id) => setCart(prev => prev.filter(i => i.id !== id));
+
+  const handleAdminSale = async () => {
+    try {
+      await apiFetch('/ventas', { method: 'POST', body: JSON.stringify({ items: cart.map(i => ({ id: i.id, cantidad: i.cantidad })) }) });
+      addToast('Transacción registrada'); setCart([]); setShowCart(false); fetchData();
+    } catch (e) { addToast(e.message, 'error'); }
+  };
+
+  const openCart = () => { setCartStep('cart'); setShowCart(true); };
+  const closeCart = () => { setShowCart(false); setTimeout(() => setCartStep('cart'), 400); };
+
+  const filteredProducts = useMemo(() =>
+    products.filter(p => !search || p.nombre.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase())),
+    [products, search]);
+
+  const cartTotal = cart.reduce((acc, i) => acc + i.precio * i.cantidad, 0);
+
+  const navItems = [
+    { key: 'inventory', icon: '📦', label: 'Inventario' },
+    { key: 'orders',    icon: '🛍️',  label: 'Órdenes',  badge: pendingOrders },
+    { key: 'income',    icon: '💰',  label: 'Ingresos' },
+    { key: 'reports',   icon: '📜',  label: 'Reportes' },
+    { key: 'options',   icon: '⚙️',  label: 'Opciones' },
   ];
 
-  // ── Render de error de API
-  if (apiError && products.length === 0 && !loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', flexDirection: 'column', gap: 16, padding: 24 }}>
-        <div style={{ fontSize: '3rem' }}>🔌</div>
-        <h2 style={{ color: 'var(--text-primary)', margin: 0 }}>Sin conexión al backend</h2>
-        <p style={{ color: 'var(--text-muted)', textAlign: 'center', maxWidth: 400 }}>
-          No se pudo conectar con el servidor en <code style={{ color: 'var(--accent)' }}>http://localhost:3001</code>.<br />
-          Asegúrate de que el backend esté corriendo con <code style={{ color: 'var(--accent)' }}>npm start</code> dentro de la carpeta <code style={{ color: 'var(--accent)' }}>backend/</code>.
-        </p>
-        <button className="btn btn-primary" onClick={() => { setLoading(true); fetchAll(); }}>🔄 Reintentar</button>
-      </div>
-    );
-  }
-
   return (
-    <div className="app-layout">
-      {/* ── SIDEBAR */}
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <h1>📦 InvenPro</h1>
-          <p>Sistema de Inventario</p>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">Categorías</div>
-          {allCategories.map(cat => (
-            <button
-              key={cat.id}
-              className={`sidebar-btn ${selectedCategory === cat.id ? 'active' : ''}`}
-              onClick={() => setSelectedCategory(cat.id)}
-            >
-              <span className="icon">{cat.icono || cat.icon}</span>
-              <span style={{ flex: 1 }}>{cat.nombre}</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                {cat.id === 'all' ? (stats?.total_productos ?? 0) : (catStats[cat.id] ?? 0)}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <div className="sidebar-footer">
-          <div className="stats-mini">
-            <div className="stat-mini-item">
-              <span className="stat-mini-label">🟡 Stock bajo</span>
-              <span className="stat-mini-value" style={{ color: 'var(--warning)' }}>{stats?.stock_bajo ?? '—'}</span>
+    <div className={`app-container ${isAdminPath ? 'sidebar-mode' : 'public-mode'}`}>
+      {isAdminPath && (
+        <aside className="sidebar glass-dark">
+          <h2 className="logo">Inven<span className="accent">Pro</span></h2>
+          <nav className="sidebar-nav-list">
+            {navItems.map(({ key, icon, label, badge }) => (
+              <button key={key} className={`nav-link ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key)}>
+                <span className="nav-icon-wrap">
+                  <span className="nav-icon">{icon}</span>
+                  {badge > 0 && key === 'orders' && <span className="nav-notify-dot pulse">{badge}</span>}
+                </span>
+                <span className="nav-text">{label}</span>
+                {badge > 0 && key === 'orders' && <span className="nav-badge-count">{badge}</span>}
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-footer-polish">
+            <div className="stock-alert-box glass">
+              <span className="label">Bajo Stock</span>
+              <span className="count warning">{stats?.stock_bajo ?? 0}</span>
             </div>
-            <div className="stat-mini-item">
-              <span className="stat-mini-label">⚫ Sin stock</span>
-              <span className="stat-mini-value" style={{ color: 'var(--danger)' }}>{stats?.sin_stock ?? '—'}</span>
-            </div>
-            <div className="stat-mini-item">
-              <span className="stat-mini-label">💰 Valor total</span>
-              <span className="stat-mini-value" style={{ color: 'var(--success)' }}>
-                {stats ? formatPrice(stats.valor_inventario) : '—'}
-              </span>
-            </div>
+            <Link to="/" className="btn-outline-nav">🏠 Landing</Link>
           </div>
-        </div>
-      </aside>
+        </aside>
+      )}
 
-      {/* ── MAIN */}
-      <div className="main-content">
-        {/* ── TOPBAR */}
-        <header className="topbar">
-          <span className="topbar-title">Inventario</span>
-          <div className="search-wrap">
+      <main className="viewport-main">
+        <header className="top-bar glass">
+          <div className="top-bar-left">
+            {!isAdminPath ? <h2 className="logo">Inven<span className="accent">Pro</span></h2> : <span className="dash-title gradient-text">Dashboard</span>}
+          </div>
+          <div className="top-bar-center search-container glass-light">
             <span className="search-icon">🔍</span>
-            <input
-              className="search-input"
-              placeholder="Buscar por nombre, descripción o SKU..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
+            <input placeholder="Buscar por nombre o SKU..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <div className="topbar-actions">
-            <button className={`btn-cart-toggle ${cart.length > 0 ? 'has-items' : ''}`} onClick={() => setShowCart(true)}>
-              🛒 <span className="cart-count">{cart.length}</span>
-            </button>
-            <div className="view-toggle">
-              <button className={`view-toggle-btn ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')} title="Vista tabla">☰</button>
-              <button className={`view-toggle-btn ${view === 'cards' ? 'active' : ''}`} onClick={() => setView('cards')} title="Vista tarjetas">⊞</button>
-            </div>
-            <button className="btn btn-primary" onClick={() => setModal({ mode: 'add', product: null })}>
-              ＋ Agregar Producto
-            </button>
+          <div className="top-bar-right">
+            <button className="theme-toggle-round" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
+            <button className="cart-trigger-pill" onClick={openCart}>🛒 <span className="cart-badge">{cart.length}</span></button>
           </div>
         </header>
 
-        {/* ── CONTENT */}
-        <div className="content-area">
-          {/* Stats */}
-          <div className="stats-grid">
-            <div className="stat-card stat-blue">
-              <div className="stat-card-icon">📦</div>
-              <div className="stat-card-label">Productos</div>
-              <div className="stat-card-value">{stats?.total_productos ?? '—'}</div>
-              <div className="stat-card-sub">en catálogo</div>
-            </div>
-            <div className="stat-card stat-green">
-              <div className="stat-card-icon">📊</div>
-              <div className="stat-card-label">Unidades</div>
-              <div className="stat-card-value">{stats ? Number(stats.total_stock).toLocaleString() : '—'}</div>
-              <div className="stat-card-sub">en stock total</div>
-            </div>
-            <div className="stat-card stat-yellow">
-              <div className="stat-card-icon">💰</div>
-              <div className="stat-card-label">Valor inventario</div>
-              <div className="stat-card-value">{stats ? formatPrice(stats.valor_inventario) : '—'}</div>
-              <div className="stat-card-sub">costo estimado</div>
-            </div>
-            <div className="stat-card stat-red">
-              <div className="stat-card-icon">⚠️</div>
-              <div className="stat-card-label">Alertas stock</div>
-              <div className="stat-card-value">
-                {stats ? (Number(stats.sin_stock) + Number(stats.stock_bajo)) : '—'}
-              </div>
-              <div className="stat-card-sub">{stats?.sin_stock ?? 0} sin stock</div>
-            </div>
-          </div>
+        <div className="scroll-content-container">
+          {!isAdminPath && !search && <Hero />}
+          <div className="view-grid-padding">
 
-          {/* Section header */}
-          <div className="section-header">
-            <div>
-              <div className="section-title">
-                {allCategories.find(c => c.id === selectedCategory)?.icono || '📦'}{' '}
-                {allCategories.find(c => c.id === selectedCategory)?.nombre || 'Todos'}
-              </div>
-              <div className="section-sub">{products.length} producto{products.length !== 1 ? 's' : ''} encontrado{products.length !== 1 ? 's' : ''}</div>
-            </div>
-          </div>
-
-          {/* Filter bar */}
-          <div className="filter-bar">
-            <select className="filter-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-              <option value="nombre">Ordenar: Nombre A-Z</option>
-              <option value="price_asc">Precio: Menor a mayor</option>
-              <option value="price_desc">Precio: Mayor a menor</option>
-              <option value="stock_asc">Stock: Menor a mayor</option>
-              <option value="stock_desc">Stock: Mayor a menor</option>
-            </select>
-          </div>
-
-          {/* Loading */}
-          {loading ? (
-            <div className="table-wrap">
-              <div className="empty-state">
-                <div className="empty-icon">⏳</div>
-                <h3>Cargando inventario...</h3>
-                <p>Conectando con la base de datos</p>
-              </div>
-            </div>
-          ) : products.length === 0 ? (
-            <div className="table-wrap">
-              <div className="empty-state">
-                <div className="empty-icon">🔍</div>
-                <h3>No se encontraron productos</h3>
-                <p>Intenta cambiar el filtro o el término de búsqueda</p>
-              </div>
-            </div>
-          ) : view === 'table' ? (
-            <div className="table-wrap">
-              <table className="product-table">
-                <thead>
-                  <tr>
-                    <th>Producto</th>
-                    <th>SKU</th>
-                    <th>Categoría</th>
-                    <th>Precio</th>
-                    <th>Stock</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.map(p => (
-                    <tr key={p.id}>
-                      <td>
-                        <div className="product-name-cell">
-                          <div className="product-avatar" style={{ background: getCatColor(p.categoria) + '20' }}>
-                            {getCatIcon(p.categoria)}
-                          </div>
-                          <div>
-                            <div className="product-name">{p.nombre}</div>
-                            <div className="product-desc">{p.descripcion}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.82rem' }}>{p.sku}</td>
-                      <td>
-                        <span className="badge badge-category">
-                          {getCatIcon(p.categoria)} {p.categoria_nombre || p.categoria}
-                        </span>
-                      </td>
-                      <td className="price-cell">{formatPrice(p.precio)}</td>
-                      <td>
-                        <span className={`stock-badge ${getStockClass(p.stock)}`}>
-                          {p.stock} {p.unidad}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`stock-badge ${getStockClass(p.stock)}`}>
-                          {getStockLabel(p.stock)}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="actions-cell">
-                          <button className="btn-table btn-table-edit" onClick={() => setModal({ mode: 'edit', product: p })}>✏️</button>
-                          <button className="btn-table btn-table-cart" onClick={() => addToCart(p)} disabled={p.stock <= 0}>🛒</button>
-                          <button className="btn-table btn-table-delete" onClick={() => setConfirmDelete(p)}>🗑️</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="cards-grid">
-              {products.map(p => (
-                <div key={p.id} className="product-card">
-                  <div className="product-card-header">
-                    <div className="product-card-avatar" style={{ background: getCatColor(p.categoria) + '20' }}>
-                      {getCatIcon(p.categoria)}
-                    </div>
-                    <div>
-                      <div className="product-card-name">{p.nombre}</div>
-                      <div className="product-card-cat">{p.categoria_nombre || p.categoria}</div>
-                    </div>
-                  </div>
-                  <div className="product-card-price">{formatPrice(p.precio)}</div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4 }}>SKU: {p.sku}</div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4, lineHeight: 1.5 }}>{p.descripcion}</div>
-                  <div className="product-card-footer">
-                    <span className={`stock-badge ${getStockClass(p.stock)}`}>{p.stock} {p.unidad}</span>
-                    <div className="product-card-actions">
-                      <button className="btn-table btn-table-cart" onClick={() => addToCart(p)} disabled={p.stock <= 0} style={{ padding: '4px 12px' }}>🛒 Añadir</button>
-                      <button className="btn-table btn-table-edit" onClick={() => setModal({ mode: 'edit', product: p })}>✏️</button>
-                      <button className="btn-table btn-table-delete" onClick={() => setConfirmDelete(p)}>🗑️</button>
-                    </div>
-                  </div>
+            {(activeTab === 'inventory' || !isAdminPath) && (
+              <>
+                <div className="view-header">
+                  <h3>{isAdminPath ? 'Control de Stock' : 'Nuestro Catálogo'}</h3>
+                  {isAdminPath && <button className="btn btn-primary premium-shadow" onClick={() => setModal({ type: 'add' })}>✨ Registrar Artículo</button>}
                 </div>
-              ))}
-            </div>
-          )}
+                <div className={`products-responsive-grid ${isAdminPath ? 'admin-grid' : 'public-grid'}`}>
+                  {filteredProducts.map(p => (
+                    <div key={p.id} className="modern-item-card glass-light hover-up">
+                      <div className="media-container">
+                        {p.imagen ? <img src={`${API_BASE}/../asset/${p.imagen}`} alt="" /> : <span className="no-img">📦</span>}
+                        {isAdminPath
+                          ? <span className={`badge-stock ${getStockClass(p.stock)}`}>{p.stock} {p.unidad}</span>
+                          : <span className={`badge-stock ${p.stock > 0 ? 'stock-ok' : 'stock-out'}`}>{p.stock > 0 ? 'Disponible' : 'Agotado'}</span>
+                        }
+                      </div>
+                      <div className="card-body">
+                        <h4 className="item-title">{p.nombre}</h4>
+                        <div className="item-price">{formatPrice(p.precio)}</div>
+                        {!isAdminPath && <div className="item-bio">{p.descripcion || 'Calidad premium.'}</div>}
+                        {isAdminPath && <div className="item-admin-meta glass"><span>SKU: {p.sku}</span><span className="meta-sep">|</span><span>Stock: {p.stock}</span></div>}
+                        <div className="card-footer-flex">
+                          {isAdminPath && <button className="btn-edit-action" onClick={() => setModal({ type: 'edit', product: p })}>Editar</button>}
+                          <button className={`btn btn-primary ${isAdminPath ? 'small' : 'full'} premium-shadow`} onClick={() => addToCart(p)} disabled={p.stock <= 0}>
+                            {p.stock > 0 ? (isAdminPath ? '🛒' : '🛒 Añadir') : '🚫 Sin Stock'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {isAdminPath && activeTab === 'orders' && <AdminOrdenesTab addToast={addToast} onRefreshStats={fetchData} />}
+
+            {isAdminPath && activeTab === 'income' && (
+              <div className="income-v-layout glass-light fade-in">
+                <h3>💰 Ingresos por Día</h3>
+                <div className="table-responsive-wrapper">
+                  <table className="pro-table">
+                    <thead><tr><th>Fecha</th><th>Transacciones</th><th>Total Neto</th></tr></thead>
+                    <tbody>{income.map(i => <tr key={i.dia}><td>{i.dia}</td><td>{i.num_ventas}</td><td className="accent-text">{formatPrice(i.total_dia)}</td></tr>)}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {isAdminPath && activeTab === 'reports' && (
+              <div className="reports-v-layout fade-in">
+                <h3>📜 Historial de Ventas</h3>
+                <div className="order-accordion-list">
+                  {sales.map(s => {
+                    const exp = expandedSales[s.venta_id];
+                    return (
+                      <div key={s.venta_id} className={`order-card glass-light ${exp ? 'expanded' : ''}`} onClick={() => setExpandedSales(p => ({ ...p, [s.venta_id]: !p[s.venta_id] }))}>
+                        <div className="order-head">
+                          <span className="id">#ORD-{s.venta_id}</span>
+                          <span className="time">{new Date(s.fecha).toLocaleTimeString()}</span>
+                          <span className="total">{formatPrice(s.total)}</span>
+                          <span className="arrow">{exp ? '▲' : '▼'}</span>
+                        </div>
+                        {exp && (
+                          <div className="order-details slide-down">
+                            <table className="detail-pro-table">
+                              <thead><tr><th>Artículo</th><th>Cant.</th><th>Subtotal</th></tr></thead>
+                              <tbody>{s.items.map((item, idx) => <tr key={idx}><td>{item.nombre}</td><td>×{item.cantidad}</td><td>{formatPrice(item.subtotal)}</td></tr>)}</tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {isAdminPath && activeTab === 'options' && (
+              <OpcionesTab addToast={addToast} onRefreshAll={() => { fetchData(); fetchReports(); }} />
+            )}
+
+          </div>
         </div>
-      </div>
+      </main>
 
-      {/* ── CART DRAWER */}
+      {/* ── CART DRAWER ───────────────────────────────────────── */}
       {showCart && (
-        <div className="cart-backdrop" onClick={() => setShowCart(false)}>
-          <div className="cart-drawer" onClick={e => e.stopPropagation()}>
-            <div className="cart-header">
-              <span className="cart-title">🛒 Carrito de Compras</span>
-              <button className="cart-close" onClick={() => setShowCart(false)}>✕</button>
+        <div className="side-drawer-overlay" onClick={closeCart}>
+          <div className="side-drawer glass-light slide-right" onClick={e => e.stopPropagation()}>
+            <div className="drawer-head-flex">
+              <h3>{cartStep === 'checkout' ? '📋 Tus Datos' : cartStep === 'success' ? '✅ Confirmación' : '🛍️ Mi Carrito'}</h3>
+              <button className="close-btn" onClick={closeCart}>✕</button>
             </div>
-            <div className="cart-body">
-              {cart.length === 0 ? (
-                <div className="cart-empty">
-                  <div className="cart-empty-icon">🛒</div>
-                  <h3>El carrito está vacío</h3>
-                  <p>Añade productos del inventario para realizar una venta</p>
-                </div>
-              ) : (
-                <div className="cart-items">
-                  {cart.map(item => (
-                    <div key={item.id} className="cart-item">
-                      <div className="cart-item-info">
-                        <div className="cart-item-name">{item.name || item.nombre}</div>
-                        <div className="cart-item-price">{formatPrice(item.precio)} c/u</div>
+
+            {cartStep === 'cart' && (
+              <>
+                <div className="drawer-scroll-body modern-scroll">
+                  {cart.length === 0 ? (
+                    <div className="empty-state"><h3>Carrito Vacío</h3><p>Agrega productos del catálogo.</p></div>
+                  ) : cart.map(i => (
+                    <div key={i.id} className="drawer-item-row glass">
+                      <div className="info">
+                        <div className="name">{i.nombre}</div>
+                        <div className="price">{formatPrice(i.precio * i.cantidad)}</div>
                       </div>
-                      <div className="cart-item-actions">
+                      <div className="actions">
                         <div className="qty-controls">
-                          <button onClick={() => updateCartQuantity(item.id, -1)}>−</button>
-                          <span>{item.cantidad}</span>
-                          <button onClick={() => updateCartQuantity(item.id, 1)}>+</button>
+                          <button className="qty-btn" onClick={() => changeQty(i.id, -1)}>−</button>
+                          <span className="qty-num">{i.cantidad}</span>
+                          <button className="qty-btn" onClick={() => changeQty(i.id, 1)} disabled={i.cantidad >= i.stock}>+</button>
                         </div>
-                        <div className="cart-item-subtotal">{formatPrice(item.precio * item.cantidad)}</div>
-                        <button className="btn-remove" onClick={() => removeFromCart(item.id)}>🗑️</button>
+                        <button className="btn-del" onClick={() => removeFromCart(i.id)}>🗑️</button>
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-            {cart.length > 0 && (
-              <div className="cart-footer">
-                <div className="cart-total-row">
-                  <span>Total a pagar:</span>
-                  <span className="cart-total-value">{formatPrice(cartTotal)}</span>
-                </div>
-                <button
-                  className="btn btn-primary btn-checkout"
-                  onClick={handleCheckout}
-                  disabled={checkingOut}
-                >
-                  {checkingOut ? '⏳ Procesando...' : '💳 Realizar Venta'}
-                </button>
-              </div>
+                {cart.length > 0 && (
+                  <div className="drawer-footer-polish">
+                    <div className="grand-total-box"><span>Total:</span><span className="amount">{formatPrice(cartTotal)}</span></div>
+                    {isAdminPath
+                      ? <button className="btn btn-primary full big-btn premium-shadow" onClick={handleAdminSale}>💸 Registrar Venta</button>
+                      : <button className="btn btn-primary full big-btn premium-shadow" onClick={() => setCartStep('checkout')}>🛍️ Proceder al Pago</button>
+                    }
+                  </div>
+                )}
+              </>
+            )}
+
+            {cartStep === 'checkout' && (
+              <CheckoutForm cart={cart} onSuccess={order => { setCompletedOrder(order); setCartStep('success'); }} onBack={() => setCartStep('cart')} addToast={addToast} />
+            )}
+
+            {cartStep === 'success' && completedOrder && (
+              <OrderSuccessScreen order={completedOrder} onClose={() => { setCart([]); closeCart(); setCompletedOrder(null); pollPendingOrders(); }} />
             )}
           </div>
         </div>
       )}
 
-      {/* ── MODALS */}
+      {/* ── MODAL ─────────────────────────────────────────────── */}
       {modal && (
         <ProductModal
-          product={modal.mode === 'edit' ? modal.product : null}
-          categories={categories}
-          onSave={handleSave}
+          product={modal.product}
+          onSave={async (fd, id) => {
+            try {
+              if (id) await apiFetch(`/productos/${id}`, { method: 'PUT', body: fd });
+              else await apiFetch('/productos', { method: 'POST', body: fd });
+              addToast('Guardado correctamente'); setModal(null); fetchData();
+            } catch (e) { addToast(e.message, 'error'); }
+          }}
+          onDelete={async (p) => {
+            try {
+              await apiFetch(`/productos/${p.id}`, { method: 'DELETE' });
+              addToast('Eliminado'); setModal(null); fetchData();
+            } catch (e) { addToast(e.message, 'error'); }
+          }}
           onClose={() => setModal(null)}
         />
       )}
-
-      {confirmDelete && (
-        <ConfirmDialog
-          message={`¿Deseas eliminar "${confirmDelete.nombre}"? Esta acción no se puede deshacer.`}
-          onConfirm={() => handleDelete(confirmDelete)}
-          onCancel={() => setConfirmDelete(null)}
-          loading={deleteLoading}
-        />
-      )}
-
       <Toast toasts={toasts} />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/admin" element={<AppContent />} />
+        <Route path="/" element={<AppContent />} />
+      </Routes>
+    </Router>
   );
 }
 

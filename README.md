@@ -1,70 +1,155 @@
-# Getting Started with Create React App
+# InvenPro Premium 🚀
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Sistema de gestión de inventario y ventas con una vista pública para clientes y un panel administrativo privado.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## ✨ Funcionalidades
 
-### `npm start`
+| Módulo | Descripción |
+|---|---|
+| 🏪 **Catálogo Público** | Landing page con búsqueda, badges de disponibilidad y carrito de compras |
+| 🛒 **Pedidos de Clientes** | Flujo de checkout con nombre y teléfono → genera número de orden |
+| 📦 **Inventario Admin** | CRUD de productos con imágenes, grilla 4 columnas |
+| 🛍️ **Órdenes Admin** | Recibe pedidos de la landing, confirma venta (descuenta stock) o cancela |
+| 💰 **Ingresos** | Resumen de ingresos agrupados por día |
+| 📜 **Reportes** | Historial detallado de todas las ventas |
+| ⚙️ **Opciones** | Limpieza y descarga en PDF de órdenes, reportes e ingresos |
+| 🌙 **Tema Claro/Oscuro** | Persistido en localStorage |
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 🏗️ Stack Tecnológico
 
-### `npm test`
+- **Frontend**: React 18, React Router v6, CSS (Glassmorphism)
+- **Backend**: Node.js 18 + Express, Multer (uploads)
+- **Base de Datos**: PostgreSQL
+- **Servidor**: Nginx (producción)
+- **Contenedores**: Docker + Docker Compose
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## 🐳 Despliegue con Docker
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Pre-requisitos
+- Docker y Docker Compose instalados
+- Base de datos PostgreSQL accesible (local o remota)
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 1. Configurar variables de entorno
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Crea o edita `backend/.env`:
 
-### `npm run eject`
+```env
+DB_HOST=192.168.100.100   # IP de tu servidor PostgreSQL
+DB_PORT=5432
+DB_NAME=pruebas
+DB_USER=postgres
+DB_PASSWORD=tu_contraseña
+PORT=3001
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+O pásalas directamente al docker-compose.yml editando la sección `environment`.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### 2. Construir y levantar
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```bash
+docker compose up -d --build
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### 3. Verificar
 
-## Learn More
+```bash
+docker compose ps           # Ver estado de los contenedores
+docker compose logs backend # Logs del backend
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+La aplicación quedará disponible en:
+- **Frontend**: `http://tu-ip:8080`
+- **API Backend**: `http://tu-ip:3001/api/health`
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### 4. Detener
 
-### Code Splitting
+```bash
+docker compose down
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+---
 
-### Analyzing the Bundle Size
+## 💻 Desarrollo Local
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+### Backend
 
-### Making a Progressive Web App
+```bash
+cd backend
+npm install
+node server.js      # Puerto 3001
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+### Frontend
 
-### Advanced Configuration
+```bash
+npm install
+npm start           # Puerto 3000 (proxy → 3001)
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+Abre `http://localhost:3000` para la landing pública.  
+Abre `http://localhost:3000/#/admin` para el panel administrativo.
 
-### Deployment
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 📁 Estructura del Proyecto
 
-### `npm run build` fails to minify
+```
+prueba/
+├── backend/
+│   ├── asset/          # Imágenes de productos (persistir como volumen)
+│   ├── server.js       # API REST + lógica de negocio
+│   ├── init_db.js      # Script de inicialización de tablas
+│   ├── Dockerfile
+│   └── .env
+├── public/
+│   ├── index.html
+│   └── LOGO.png        # Ícono de la app
+├── src/
+│   ├── App.js          # Componente principal (vistas pública y admin)
+│   ├── App.css         # Estilos (design system glassmorphism)
+│   └── index.js
+├── Dockerfile          # Build del frontend
+├── docker-compose.yml  # Orquestación de servicios
+├── nginx.conf          # Configuración de Nginx (proxy API + SPA)
+└── README.md
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+---
+
+## 🔑 Rutas
+
+| Ruta | Vista |
+|---|---|
+| `/` | Landing pública (catálogo + carrito) |
+| `/#/admin` | Panel administrativo |
+
+---
+
+## 🖼️ Imágenes de Productos
+
+Las imágenes se guardan en `backend/asset/`. En Docker, este directorio está montado como volumen:
+
+```yaml
+volumes:
+  - ./backend/asset:/app/asset
+```
+
+Esto asegura que las imágenes **persistan** entre reinicios o actualizaciones del contenedor.
+
+---
+
+## 🗄️ Base de Datos
+
+Las tablas se crean automáticamente al iniciar el servidor. Para crearlas manualmente ejecuta:
+
+```bash
+cd backend && node init_db.js
+```
+
+Tablas principales: `productos`, `ventas`, `venta_items`, `ordenes`.

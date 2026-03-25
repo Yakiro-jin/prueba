@@ -1,5 +1,5 @@
 node_modules
 build
-.git
 .env
-README.md
+backend/node_modules
+backend/.env
