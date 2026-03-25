@@ -3,6 +3,7 @@ import { HashRouter as Router, Routes, Route, Link, useLocation } from 'react-ro
 import './App.css';
 
 const API_BASE = process.env.REACT_APP_API_URL || '/api';
+const ASSET_BASE = '/asset'; // Served by nginx proxy → backend in production
 const UNITS = ['unidad', 'caja', 'bolsa', 'botella', 'kg', 'litro', 'metro', 'par', 'rollo'];
 const EMPTY_PRODUCT = { nombre: '', descripcion: '', categoria: 'productos', precio: '', stock: '', sku: '', unidad: 'unidad', imagen: null };
 
@@ -76,7 +77,7 @@ function Hero() {
 function ProductModal({ product, onSave, onDelete, onClose }) {
   const [form, setForm] = useState(product ? { ...product } : { ...EMPTY_PRODUCT });
   const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(product?.imagen ? `${API_BASE}/../asset/${product.imagen}` : null);
+  const [preview, setPreview] = useState(product?.imagen ? `${ASSET_BASE}/${product.imagen}` : null);
   const [loading, setLoading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -554,7 +555,7 @@ function AppContent() {
                   {filteredProducts.map(p => (
                     <div key={p.id} className="modern-item-card glass-light hover-up">
                       <div className="media-container">
-                        {p.imagen ? <img src={`${API_BASE}/../asset/${p.imagen}`} alt="" /> : <span className="no-img">📦</span>}
+                        {p.imagen ? <img src={`${ASSET_BASE}/${p.imagen}`} alt="" /> : <span className="no-img">📦</span>}
                         {isAdminPath
                           ? <span className={`badge-stock ${getStockClass(p.stock)}`}>{p.stock} {p.unidad}</span>
                           : <span className={`badge-stock ${p.stock > 0 ? 'stock-ok' : 'stock-out'}`}>{p.stock > 0 ? 'Disponible' : 'Agotado'}</span>
