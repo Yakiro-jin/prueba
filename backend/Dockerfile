@@ -12,4 +12,6 @@ COPY init_db.js ./
 RUN mkdir -p asset
 
 EXPOSE 3001
-CMD ["node", "server.js"]
+
+# Inicializa las tablas y luego arranca el servidor
+CMD ["sh", "-c", "node init_db.js && node server.js"]
